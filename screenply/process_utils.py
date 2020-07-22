@@ -1,8 +1,10 @@
+from uuid import uuid4
 import pandas as pd
 import os
 import json
+import ocrmypdf
 
-from parser import Screenplay
+from screenply.screenply.parser import Screenplay
 
 
 def serialize(data):
@@ -11,23 +13,43 @@ def serialize(data):
     return "\n".join([json.dumps(l) for l in data.to_dict(orient='records')])
 
 
-def batch_process(files, failure_path=None, html=False, debug_mode=False):
-	if not failure_path:
-		failure_path = "%s_failures.json" % uuid4()
-	data = pd.DataFrame()
-	for f in files:
-		try:
-			if html:
-				scr = Screenplay(from_html=f, debug_mode=debug_mode)
-			else:
-				scr = Screenplay(f, debug_mode=debug_mode)
-			data = data.append(scr.data)
-			if failure_path and scr.failure_info:
-				with open(failure_path, 'a') as f:
-					f.write(json.dumps(scr.failure_info)+"\n")
-		except:
-			print("%s failed" % f)
-	return data
+def process(file, debug_mode=False, failure_path=None, ocr_output_dir=None):
+    if not ocr_output_dir:
+        ocr_output_dir = 'ocr_output'
+    if not os.path.exists(ocr_output_dir):
+        os.mkdir(ocr_output_dir)
+    ocr_output_path = os.path.join(ocr_output_dir, os.path.basename(file))
+    ocrmypdf.ocr(
+        input_file=file, 
+        output_file=ocr_output_path, 
+        deskew=True, 
+        use_threads=True,
+        skip_text=True,
+    )
+    scr = Screenplay(
+        source=ocr_output_path, 
+        debug_mode=debug_mode,
+        failure_path=failure_path
+    )
+    return scr
+
+
+def batch_process(files, failure_path=None, debug_mode=False, ocr_output_dir=None):
+    if not failure_path:
+        failure_path = "%s_failures.json" % uuid4()
+    data = pd.DataFrame()
+    for file in files:
+        try:
+            scr = process(
+                file, 
+                debug_mode=debug_mode,
+                failure_path=failure_path,
+                ocr_output_dir=ocr_output_dir,
+            )
+            data = data.append(scr.data)
+        except Exception as e:
+            print("%s failed -- %s" % (file, e))
+    return data
 
 
 def batch_upload(files, bucket, gcs_filename, failure_path=None, html=False, debug_mode=False):
