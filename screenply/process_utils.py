@@ -4,7 +4,7 @@ import os
 import json
 import ocrmypdf
 
-from screenply.screenply.parser import Screenplay
+from screenply.parser import Screenplay
 
 
 def serialize(data):
