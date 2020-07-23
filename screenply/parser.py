@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString, Tag
 import re
 import os
 import pandas as pd
@@ -134,6 +135,17 @@ def get_element_attributes(element):
     return element_attributes
 
 
+def get_text(c):
+    if isinstance(c, BeautifulSoup) or isinstance(c, Tag):
+        return c.text
+    else:
+        return c
+
+
+def get_div_contents(div):
+    return ''.join([get_text(c) for c in div.contents])
+
+
 def validate_element(element_attributes):
     required_keys = ['top', 'left', 'height', 'width']
     for k in required_keys:
@@ -249,7 +261,6 @@ class Screenplay(object):
     #############
 
     def pdf_to_soup(self, pages):
-        # print(self.source)
         run_pdf2txt(source=self.source, target=self.temp_html_path, pages=pages)
         if os.stat(self.temp_html_path).st_size == 0:
             return ''
@@ -273,12 +284,11 @@ class Screenplay(object):
                 data.append(row)
 
         df = pd.DataFrame(data, columns=ELEMENT_LEVEL_COLS+['border'])
-
         # identify pages
         is_page_break = df.border.str.strip() == 'gray 1px solid'
         n_pages = is_page_break.sum()
         df.loc[is_page_break, 'page'] = range(1, n_pages + 1)
-        df.page = df.page.fillna(method='ffill')
+        df.page = df.page.fillna(method='ffill').fillna(0)
         df = df.drop('border', axis=1)
 
         # convert position columns to numeric
@@ -307,19 +317,15 @@ class Screenplay(object):
             line_data['element_id'] = element_id
             line_data['line_num'] = line_num
             line_data['line_id'] = "%s_%s" % (element_id, line_num)
-            try:
-                line_data['text'] = strip_html_tags(line)
-                line_data['raw_text'] = strip_html_tags(line)
-            except:
-                print(element)
-                print(lines)
-                return
+            contents = get_div_contents(BeautifulSoup(line, "html.parser"))
+            line_data['text'] = "%s %s" % (strip_html_tags(line), contents)
+            line_data['raw_text'] = "%s %s" % (strip_html_tags(line), contents)
             lines_data.append(line_data)
 
         return lines_data
 
     def soup_to_data(self, soup):
-        elements = soup.find('body').findChildren(recursive=False)
+        elements = soup.find('body').find_all('div')
         self.elements_df = self.soup_to_elements(elements)
 
         lines_data = []
@@ -331,7 +337,9 @@ class Screenplay(object):
         lines_df.text = lines_df.text.apply(lambda s: s.strip())
         lines_df['n_chars'] = lines_df.text.apply(len).astype(int)
 
-        return pd.merge(self.elements_df, lines_df, on='element_id')
+
+        data = pd.merge(self.elements_df, lines_df, on='element_id')
+        return data
 
     #############
     #######
@@ -353,7 +361,6 @@ class Screenplay(object):
         firsts['last_page_header'] = firsts.raw_text.shift(1).fillna(' ')
         firsts['similarity'] = firsts.apply(lambda arr: similar(arr[0], arr[1]), axis=1)
         header_similarity = firsts.similarity.mean()
-        print(header_similarity)
         if header_similarity > .75:
             self.data = self.data[~first_lines_mask]
             first_line_elements = self.data[first_lines_mask].element_id
@@ -398,24 +405,24 @@ class Screenplay(object):
         text = strip_parentheticals(row.text)
         is_upper = text == text.upper()
         first_line = row.line_num == 0
-        in_middle = is_in_range(row.left, 120, 300) and is_in_range(row.width, 0, 300) # need to figure out that width max
+        in_middle = is_in_range(row.left, 130, 300) and is_in_range(row.width, 0, 300) # need to figure out that width max
         prior_whitespace = row.prior_whitespace >= WHITESPACE_MIN
         return is_upper and in_middle and first_line and prior_whitespace and not self.is_parenthetical(row)
 
     def is_action(self, row):
-        is_left_align = is_in_range(row.left, 0, 120)
+        is_left_align = is_in_range(row.left, 0, 130)
         no_int_ext = row.text[:4] not in SCENE_HEADING_INDICATORS
         return is_left_align and no_int_ext
 
     def is_parenthetical(self, row):
-        in_middle = is_in_range(row.left, 120, 300)
+        in_middle = is_in_range(row.left, 130, 300)
         no_prior_whitespace = row.prior_whitespace < WHITESPACE_MIN
         not_first_line = row.line_num > 0
         parentheses = row.text[0]+row.text[-1] == '()'
         return in_middle and (no_prior_whitespace or not_first_line) and parentheses 
 
     def is_dialogue(self, row):
-        in_middle = is_in_range(row.left, 120, 300)
+        in_middle = is_in_range(row.left, 130, 300)
         no_prior_whitespace = row.prior_whitespace < WHITESPACE_MIN
         not_first_line = row.line_num > 0
         return in_middle and (no_prior_whitespace or not_first_line) and not self.is_parenthetical(row)
@@ -481,7 +488,7 @@ class Screenplay(object):
         self.data.loc[mask, 'character'] = None
 
         # add a unique id, ordered by frequency
-        characters = self.data.pivot_table('height', 'character', aggfunc='sum')
+        characters = self.data.pivot_table(values=['height'], index=['character'], aggfunc='sum')
         characters = characters[(~characters.index.isnull()) & (characters.index!='')]
         characters = characters.sort_values('height', ascending=False).reset_index()
         characters['character_id'] = characters.index
