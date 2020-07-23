@@ -8,7 +8,7 @@ from uuid import uuid4
 import datetime
 import json
 from difflib import SequenceMatcher
-import pdfminer.high_level
+import pdfminer
 from pdfminer.layout import LAParams
 
 # scene headings
