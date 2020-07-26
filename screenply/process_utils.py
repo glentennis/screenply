@@ -39,7 +39,7 @@ def process(file, failure_path=None, ocr_output_dir=None, **kwargs):
     return scr
 
 
-def batch_process(files, failure_path=None, ocr_output_dir=None, **kwargs):
+def batch_process(files, failure_path=None, ocr_output_dir=None, gcs_bucket=None, **kwargs):
     if not failure_path:
         failure_path = "%s_failures.json" % uuid4()
     data = pd.DataFrame()
@@ -52,6 +52,9 @@ def batch_process(files, failure_path=None, ocr_output_dir=None, **kwargs):
                 **kwargs
             )
             data = data.append(scr.data)
+            if gcs_bucket:
+                gcs_filename = "{}.json".format(scr.title)
+                gcs_upload(scr.data, gcs_bucket, gcs_filename)
         except FileNotFoundError as e:
             now = str(datetime.datetime.now())
             failure_info = {'title': file, 'date': now, 'reason': str(e), 'value': 'process'}
@@ -61,16 +64,15 @@ def batch_process(files, failure_path=None, ocr_output_dir=None, **kwargs):
     return data
 
 
-def batch_upload(files, bucket, gcs_filename, failure_path=None, html=False, debug_mode=False):
-    data = batch_process(files, failure_path=failure_path, html=html)
+def gcs_upload(data, gcs_bucket, gcs_filename):
     if len(data) > 0:
-        blob = bucket.blob(gcs_filename)
+        blob = gcs_bucket.blob(gcs_filename)
         blob.upload_from_string(serialize(data))
     msg = """
-    wrote {n_files} to {gcs_filename}
+    wrote {gcs_filename}
     in bucket: {bucket}
     """
-    print(msg.format(n_files=data.title.nunique, gcs_filename=gcs_filename, bucket=bucket))
+    print(msg.format(gcs_filename=gcs_filename, bucket=gcs_bucket))
 
 
 def scan_folder(folder, suffix='.pdf'):
