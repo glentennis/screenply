@@ -9,7 +9,7 @@ import datetime
 import json
 from difflib import SequenceMatcher
 import pdfminer
-from pdfminer.layout import LAParams
+
 
 # scene headings
 SCENE_HEADING_INDICATORS = ['INT.', 'EXT.']
@@ -65,7 +65,7 @@ def similar(a, b):
 def run_pdf2txt(source, target, pages=[]):
     with open(target, 'w') as f:
         with open(source, 'rb') as fin:
-            pdfminer.high_level.extract_text_to_fp(fin, f, laparams=LAParams(), output_type='html', codec=None)
+            pdfminer.high_level.extract_text_to_fp(fin, f, laparams=pdfminer.layout.LAParams(), output_type='html', codec=None)
 
 
 
