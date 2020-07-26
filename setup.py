@@ -5,7 +5,7 @@ setup(
     version="0.1",
     packages=find_packages(),
 
-    install_requires=["pdfminer","ocrmypdf","pandas","numpy","bs4"],
+    install_requires=["pdfminer.six","ocrmypdf","pandas","numpy","bs4"],
 
     package_data={
     },
