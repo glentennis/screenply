@@ -10,7 +10,7 @@ import json
 from difflib import SequenceMatcher
 import pdfminer.layout
 import pdfminer.high_level
-import validate
+import screenply.validate
 
 # scene headings
 SCENE_HEADING_INDICATORS = ['INT.', 'EXT.']
