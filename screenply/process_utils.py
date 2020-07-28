@@ -55,7 +55,7 @@ def batch_process(files, failure_path=None, ocr_output_dir=None, gcs_bucket=None
             if gcs_bucket:
                 gcs_filename = "{}.json".format(scr.title)
                 gcs_upload(scr.data, gcs_bucket, gcs_filename)
-        except FileNotFoundError as e:
+        except Exception as e:
             now = str(datetime.datetime.now())
             failure_info = {'title': file, 'date': now, 'reason': str(e), 'value': 'process'}
             if failure_path:

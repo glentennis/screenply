@@ -10,6 +10,7 @@ import json
 from difflib import SequenceMatcher
 import pdfminer.layout
 import pdfminer.high_level
+import validate
 
 # scene headings
 SCENE_HEADING_INDICATORS = ['INT.', 'EXT.']
@@ -63,10 +64,13 @@ def similar(a, b):
 
 
 def run_pdf2txt(source, target, pages=[]):
-    with open(target, 'w') as f:
-        with open(source, 'rb') as fin:
-            pdfminer.high_level.extract_text_to_fp(fin, f, laparams=pdfminer.layout.LAParams(), output_type='html', codec=None)
-
+    with open(target, 'w') as f_out:
+        with open(source, 'rb') as f_in:
+            pdfminer.high_level.extract_text_to_fp(f_in, 
+                                                   f_out, 
+                                                   laparams=pdfminer.layout.LAParams(), 
+                                                   output_type='html', 
+                                                   codec=None)
 
 
 def convert_position_to_num(x):
@@ -166,10 +170,9 @@ class Screenplay(object):
         errors.
 
     *If you have a previously parsed PDF and have saved the temp html file,
-        you can instantiate a Screenplay object faster using the source
-        parameter
+        you can instantiate a Screenplay object faster by passing that as the source.
 
-    Uses pdf2txt.py to convert a PDF to an HTML document, then uses BeautifulSoup
+    Uses pdfminer to convert a PDF to an HTML document, then uses BeautifulSoup
         to extract data from the HTML.
 
     Parameters
@@ -195,10 +198,6 @@ class Screenplay(object):
         if validation fails, this contains info on the failure
     title : str
         stripped title from file path
-    soup : BeautifulSoup
-        BeautifulSoup object containing HTML version of data
-    soup : BeautifulSoup
-        BeautifulSoup object containing HTML version of data
     soup : BeautifulSoup
         BeautifulSoup object containing HTML version of data
 
@@ -243,10 +242,10 @@ class Screenplay(object):
             self.identify_characters()
             self.identify_scenes()
 
-        self.data['title'] = self.title
+        self.data = self.data.assign({'title', self.title})
 
         last_page = self.data.page.max()
-        self.data['format'] = get_format(last_page)       
+        self.data = self.data.assign({'title', self.title})['format'] = get_format(last_page)       
         self.data['path'] = self.source
 
         if self.validation:
@@ -522,92 +521,10 @@ class Screenplay(object):
             with open(self.failure_path, 'a') as f:
                 f.write(json.dumps(self.failure_info) + "\n")
 
-    def get_validation_summary(self):
-        df_copy = self.data.copy()
-        # generate variable to calculate avg dialogue length (later)
-        mask = df_copy.unit_type=='dialogue'
-        df_copy.loc[mask, 'n_chars_dialogue'] = df_copy.loc[mask, 'n_chars']
-
-        # generate n_spaces for each line to calculate spaces per char (later)
-        df_copy['n_spaces'] = df_copy.text.apply(lambda s: s.count(' '))
-
-        # generate summary table
-        methods = {
-            #     'character':pd.Series.nunique,
-            'page': np.max,
-            'left': pd.Series.nunique,
-            'is_dialogue': np.sum,
-            'is_action': np.sum,
-            'n_chars_dialogue': np.mean,
-            'n_spaces': np.sum,
-            'n_chars': np.sum
-        }
-
-        return df_copy.aggregate(methods)
-
     def validate(self):
-        """
-        A set of heuristics to identify bad PDFs, based on generous,
-            approximate thresholds determined by looking at outliers.
-
-        If a failure is detected, set dataframe to empty so that this PDF
-            won't contribute bad data in a batch job.
-
-        The different criteria are sorted in order of importance. For example,
-            if a script is a bad scan, we want to log that as the error 
-            (rather than all the other errors the script will trigger) 
-            because the bad scan is the root of the problem.
-
-        Other ideas:
-            - scripts with odd left/right boundaries
-            - is the line height really big / really small
-            - characters per script
-        """
-
-        # first, check for empty dataframe
-        if len(self.data) == 0:
-            return self.failure('empty dataframe')
-
-        # if not, empty, get summary statistics for validation
-        summary = self.get_validation_summary()
-
-        # is the left alignment inconsistent? (detects badly scanned scripts mostly)
-        # here we look at the unique count of left alignment values for units in the script
-        # if summary.left > 100:
-        #     return self.failure('unique number of left alignment positions', summary.left)
-
-        # common error: pdf reader doesn't put spaces between words
-        spaces_per_char = summary.n_spaces / summary.n_chars
-        if spaces_per_char < .05:
-            return self.failure('spaces per char', spaces_per_char)
-
-        # is there enough text per page
-        # many ill-scanned screenplays will read with a lot of empty text
-        n_chars_per_page = summary.n_chars / summary.page
-        if n_chars_per_page < 200:
-            return self.failure('chars per page', n_chars_per_page)
-
-        # has units with multiple classifications 
-        mask = self.data[CLASSIFIERS].sum(axis=1) > 1
-        if mask.sum() > 0:
-            return self.failure('units with more than one classification', mask.sum())
-
-        # is there enough dialogue
-        dialogue_per_page = summary.is_dialogue / summary.page
-        if dialogue_per_page < 1:
-            return self.failure('dialogue per page', dialogue_per_page)
-
-        # is there enough action
-        action_per_page = summary.is_action / summary.page
-        if action_per_page < 1:
-            return self.failure('action per page', action_per_page)
-
-        # average dialogue length
-        if summary.n_chars_dialogue < 10:
-            return self.failure('avg length of dialogue (chars)', summary.n_chars_dialogue)
-
-        # if self.check_for_headers():
-        #     return self.failure('headers detected')
+        failure_msg = validate.validate(self.data)
+        if failure_msg:
+            self.failure(failure_msg)
 
     #############
     #######
