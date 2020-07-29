@@ -242,10 +242,9 @@ class Screenplay(object):
             self.identify_characters()
             self.identify_scenes()
 
-        self.data = self.data.assign({'title', self.title})
-
+        self.data = self.data.assign(title=self.title)
         last_page = self.data.page.max()
-        self.data = self.data.assign({'title', self.title})['format'] = get_format(last_page)       
+        self.data = self.data.assign(format=get_format(last_page))
         self.data['path'] = self.source
 
         if self.validation:

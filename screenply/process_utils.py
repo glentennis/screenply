@@ -14,7 +14,7 @@ def serialize(data):
     return "\n".join([json.dumps(l) for l in data.to_dict(orient='records')])
 
 
-def process(file, failure_path=None, ocr_output_dir=None, **kwargs):
+def process(file, failure_path=None, ocr_output_dir=None, gcs_bucket=None, **kwargs):
     if file.endswith('.pdf'):
         if not ocr_output_dir:
             ocr_output_dir = 'ocr_output'
@@ -36,32 +36,30 @@ def process(file, failure_path=None, ocr_output_dir=None, **kwargs):
         failure_path=failure_path,
         **kwargs
     )
+    if gcs_bucket:
+        gcs_filename = "{}.json".format(scr.title)
+        gcs_upload(scr.data, gcs_bucket, gcs_filename)
     return scr
 
 
-def batch_process(files, failure_path=None, ocr_output_dir=None, gcs_bucket=None, **kwargs):
-    if not failure_path:
-        failure_path = "%s_failures.json" % uuid4()
-    data = pd.DataFrame()
-    for file in files:
-        try:
-            scr = process(
-                file, 
-                failure_path=failure_path,
-                ocr_output_dir=ocr_output_dir,
-                **kwargs
-            )
-            data = data.append(scr.data)
-            if gcs_bucket:
-                gcs_filename = "{}.json".format(scr.title)
-                gcs_upload(scr.data, gcs_bucket, gcs_filename)
-        except Exception as e:
-            now = str(datetime.datetime.now())
-            failure_info = {'title': file, 'date': now, 'reason': str(e), 'value': 'process'}
-            if failure_path:
-                with open(failure_path, 'a') as f:
-                    f.write(json.dumps(failure_info) + "\n")
-    return data
+def failure(file, e, failure_path):
+    now = str(datetime.datetime.now())
+    failure_path = failure_path or "%s_failures.json" % uuid4()
+    failure_info = {'title': file, 'date': now, 'reason': str(e), 'value': 'process'}
+    with open(failure_path, 'a') as f:
+        f.write(json.dumps(failure_info) + "\n")
+
+
+def try_process(file, failure_path=None, ocr_output_dir=None, gcs_bucket=None, **kwargs):     
+    try:
+        return process(
+            file, 
+            failure_path=failure_path,
+            ocr_output_dir=ocr_output_dir,
+            **kwargs
+        )
+    except Exception as e:
+        failure(file, e, failure_path)
 
 
 def gcs_upload(data, gcs_bucket, gcs_filename):
