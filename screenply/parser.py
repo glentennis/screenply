@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup
-from bs4.element import NavigableString, Tag
+from bs4.element import Tag
 import re
 import os
 import pandas as pd
@@ -10,53 +10,7 @@ import json
 from difflib import SequenceMatcher
 import pdfminer.layout
 import pdfminer.high_level
-import screenply.validate
-
-# scene headings
-SCENE_HEADING_INDICATORS = ['INT.', 'EXT.']
-SCENE_HEADING_TIMES_OF_DAY = ['DAY', 'NIGHT']
-SCENE_HEADING_STOPWORDS = ['-']
-
-# ignore elements if futher left than (in pixels):
-IGNORE_PAST_LEFT = 400
-
-# minimum space between lines to be considered an 
-# empty line (in pixels). Chosen semi-arbitrarily:
-# too low -> caps dialogue gets labeled as character
-WHITESPACE_MIN = 5
-
-# rough maximum page counts for different formats
-PAGE_MAX_BY_FORMAT = [
-    ('other', 20),
-    ('half_hour', 45),
-    ('hour', 70),
-    ('feature', 9999)
-]
-
-##
-# SPECIFY COLUMNS
-## 
-ELEMENT_LEVEL_COLS = ['element_id',
-                'height',
-                'left',
-                'top',
-                'width',
-                'bottom',
-                'prior_whitespace',
-                'following_whitespace',
-                'page']
-
-LINE_LEVEL_COLS = ['line_id', 'text', 'raw_text', 'line_num', 'element_id', 'n_chars', 'is_first_on_page']
-
-UNIT_LEVEL_COLS = ['unit_type'] # unit = piece of the script (i.e. a dialogue block or an action line)
-
-CLASSIFIERS = ['is_action', 'is_dialogue', 'is_character', 'is_parenthetical', 'is_scene_heading']
-
-# columns that point to the "parent" of an unit (i.e. dialogue belongs to character, 
-#   character belongs to scene, etc)
-PARENT_COLUMNS = ['character', 'character_id', 'scene', 'scene_id']
-
-OTHER_COLUMNS = ['title', 'format']
+from screenply import validate, constants
 
 
 def similar(a, b):
@@ -66,11 +20,13 @@ def similar(a, b):
 def run_pdf2txt(source, target, pages=[]):
     with open(target, 'w') as f_out:
         with open(source, 'rb') as f_in:
-            pdfminer.high_level.extract_text_to_fp(f_in, 
-                                                   f_out, 
-                                                   laparams=pdfminer.layout.LAParams(), 
-                                                   output_type='html', 
-                                                   codec=None)
+            pdfminer.high_level.extract_text_to_fp(
+                f_in, 
+                f_out, 
+                laparams=pdfminer.layout.LAParams(), 
+                output_type='html', 
+                codec=None
+            )
 
 
 def convert_position_to_num(x):
@@ -84,7 +40,7 @@ def convert_position_to_num(x):
 
 
 def get_format(script_length):
-    for t in PAGE_MAX_BY_FORMAT:
+    for t in constants.PAGE_MAX_BY_FORMAT:
         if script_length <= t[1]:
             return t[0]
     return t[0]
@@ -108,27 +64,11 @@ def strip_html_tags(s):
     return s.strip()
 
 
-def get_scene_time_of_day(scene_heading):
-    for t in SCENE_HEADING_TIMES_OF_DAY:
-        n_chars = len(t)
-        if scene_heading[:n_chars*-1] == t:
-            return t.lower()
-    return None
-
-
-def clean_scene_heading(scene_heading):
-    for t in SCENE_HEADING_TIMES_OF_DAY:
-        scene_heading = scene_heading.replace(t, '')
-    for w in SCENE_HEADING_STOPWORDS:
-        scene_heading = scene_heading.replace(w, '')
-    return scene_heading.strip()
-
-
 def is_in_range(leftpos, min_pos, max_pos):
     return leftpos >= min_pos and leftpos <= max_pos
 
     
-def get_element_attributes(element):
+def get_style_attributes(element):
     element_attributes = {}
     style_attrs = element.attrs['style'].split('; ')
     leave_out = ['writing-mode', 'position']
@@ -156,6 +96,17 @@ def validate_element(element_attributes):
         if k not in element_attributes:
             return False
     return True
+
+
+def is_page_break(element):
+    style_attrs = get_style_attributes(element)
+    a_tag = element.find('a')
+    if a_tag:
+        try:
+            int(a_tag.attrs['name'])
+            return True
+        except:
+            return False
 
 
 def title_from_path(path):
@@ -216,19 +167,19 @@ class Screenplay(object):
         self.debug_mode = debug_mode
         self.failure_info = {}
         self.failure_path = failure_path
-        self.data = pd.DataFrame()
+        self.raw_data = pd.DataFrame()
         self.pages = pages
         self.validation = validation
 
         if self.source.lower().endswith('.html'):
             self.title = title_from_path(self.source)
             self.soup = BeautifulSoup(open(self.source,'r'), "html.parser")
-            self.data = self.soup_to_data(self.soup)
+            self.raw_data = self.soup_to_data(self.soup)
         else:
             self.title = title_from_path(self.source)
             self.temp_html_path = self.temp_html_path or '{}.html'.format(self.title)
             self.soup = self.pdf_to_soup(self.pages)
-            self.data = self.soup_to_data(self.soup)
+            self.raw_data = self.soup_to_data(self.soup)
 
         self.drop_empty_lines()
         # self.drop_shared_lines()
@@ -236,16 +187,16 @@ class Screenplay(object):
         # while check_for_headers:
         #     check_for_headers = self.drop_headers()
         
-        if len(self.data) > 0:
+        if len(self.raw_data) > 0:
             self.label_lines()
             self.collapse_multi_line_units()
             self.identify_characters()
             self.identify_scenes()
 
-        self.data = self.data.assign(title=self.title)
-        last_page = self.data.page.max()
-        self.data = self.data.assign(format=get_format(last_page))
-        self.data['path'] = self.source
+        self.raw_data = self.raw_data.assign(title=self.title)
+        last_page = self.raw_data.page.max()
+        self.raw_data = self.raw_data.assign(format=get_format(last_page))
+        self.data = self.raw_data[constants.DISPLAY_COLUMNS]
 
         if self.validation:
             self.validate()
@@ -274,29 +225,27 @@ class Screenplay(object):
         output: dataframe containing info on each html element
         """
         data = []
+        current_page = 0
         for i, element in enumerate(elements):
+            if is_page_break(element):
+                current_page += 1            
             row = {}
             row['element_id'] = i
-            row.update(get_element_attributes(element))
+            row['page'] = current_page
+            row.update(get_style_attributes(element))
             if validate_element(row):
                 data.append(row)
 
-        df = pd.DataFrame(data, columns=ELEMENT_LEVEL_COLS+['border'])
-        # identify pages
-        is_page_break = df.border.str.strip() == 'gray 1px solid'
-        n_pages = is_page_break.sum()
-        df.loc[is_page_break, 'page'] = range(1, n_pages + 1)
-        df.page = df.page.fillna(method='ffill').fillna(0)
-        df = df.drop('border', axis=1)
+        df = pd.DataFrame(
+            data, 
+            columns=constants.ELEMENT_LEVEL_COLS
+        )
 
         # convert position columns to numeric
         positional_cols = ['left','height','top','width']
         for positional_col in positional_cols:
             df[positional_col] = df[positional_col].apply(convert_position_to_num)
 
-        # drop elements too far left (drops transitions, page numbers)
-        # df = df[df.left < IGNORE_PAST_LEFT]
-        
         # calculate prior/following whitespace
         df['bottom'] = df['top'] + df['height']
         df = df.sort_values('top')
@@ -316,8 +265,8 @@ class Screenplay(object):
             line_data['line_num'] = line_num
             line_data['line_id'] = "%s_%s" % (element_id, line_num)
             contents = get_div_contents(BeautifulSoup(line, "html.parser"))
-            line_data['text'] = "%s %s" % (strip_html_tags(line), contents)
-            line_data['raw_text'] = "%s %s" % (strip_html_tags(line), contents)
+            line_data['text'] = contents.strip()
+            line_data['raw_text'] = line
             lines_data.append(line_data)
 
         return lines_data
@@ -331,7 +280,10 @@ class Screenplay(object):
             element_lines = self.element_to_lines(element, i)
             lines_data += element_lines
 
-        lines_df = pd.DataFrame(lines_data, columns=LINE_LEVEL_COLS)
+        lines_df = pd.DataFrame(
+            lines_data, 
+            columns=constants.LINE_LEVEL_COLS
+        )
         lines_df.text = lines_df.text.apply(lambda s: s.strip())
         lines_df['n_chars'] = lines_df.text.apply(len).astype(int)
 
@@ -348,10 +300,10 @@ class Screenplay(object):
     #############
 
     def check_for_headers(self):
-        page_tops = self.data.groupby('page').min().top
-        first_lines_mask = (self.data.top.isin(page_tops)) & (self.data.line_num == 0)
+        page_tops = self.raw_data.groupby('page').min().top
+        first_lines_mask = (self.raw_data.top.isin(page_tops)) & (self.raw_data.line_num == 0)
 
-        firsts = self.data[first_lines_mask].groupby('page').agg({'raw_text': lambda arr: ' '.join(arr)})
+        firsts = self.raw_data[first_lines_mask].groupby('page').agg({'raw_text': lambda arr: ' '.join(arr)})
 
         # strip page numbers
         firsts['raw_text'] = firsts.raw_text.apply(lambda s: re.sub('[0-9]', '', s))
@@ -360,28 +312,28 @@ class Screenplay(object):
         firsts['similarity'] = firsts.apply(lambda arr: similar(arr[0], arr[1]), axis=1)
         header_similarity = firsts.similarity.mean()
         if header_similarity > .75:
-            self.data = self.data[~first_lines_mask]
-            first_line_elements = self.data[first_lines_mask].element_id
-            mask = self.data.element_id.isin(first_line_elements)
+            self.raw_data = self.raw_data[~first_lines_mask]
+            first_line_elements = self.raw_data[first_lines_mask].element_id
+            mask = self.raw_data.element_id.isin(first_line_elements)
             # should I just index after this instead of reindexing here?
-            self.data.loc[mask, 'line_num'] = self.data.loc[mask, 'line_num'] - 1
-            self.data = self.data.reset_index(drop=True)
+            self.raw_data.loc[mask, 'line_num'] = self.raw_data.loc[mask, 'line_num'] - 1
+            self.raw_data = self.raw_data.reset_index(drop=True)
             return True
         return False
 
     def drop_empty_lines(self):
-        self.data = self.data[~self.data.left.isnull()]
-        self.data = self.data[self.data.text.str.strip() != '']
+        self.raw_data = self.raw_data[~self.raw_data.left.isnull()]
+        self.raw_data = self.raw_data[self.raw_data.text.str.strip() != '']
 
     def drop_shared_lines(self):
         # simultaneous dialogue is very confusing for screenply,
         # this removes two divs with identical vertical positions
-        shared_line_positions = self.data[self.data.duplicated(['top'])].top.unique()
-        mask = self.data.top.isin(shared_line_positions)
-        self.data = self.data[~mask]
+        shared_line_positions = self.raw_data[self.raw_data.duplicated(['top'])].top.unique()
+        mask = self.raw_data.top.isin(shared_line_positions)
+        self.raw_data = self.raw_data[~mask]
 
     def collapse_multi_line_units(self):
-        by = ELEMENT_LEVEL_COLS + UNIT_LEVEL_COLS + CLASSIFIERS
+        by = constants.ELEMENT_LEVEL_COLS + constants.UNIT_LEVEL_COLS + constants.CLASSIFIERS
 
         methods = {
             'text': lambda arr: ' '.join(arr),
@@ -389,7 +341,7 @@ class Screenplay(object):
             'line_num': np.max,
             'n_chars': np.sum,
         }
-        self.data = self.data.groupby(by, as_index=False).agg(methods)
+        self.raw_data = self.raw_data.groupby(by, as_index=False).agg(methods)
 
     #############
     #######
@@ -404,36 +356,36 @@ class Screenplay(object):
         is_upper = text == text.upper()
         first_line = row.line_num == 0
         in_middle = is_in_range(row.left, 130, 300) and is_in_range(row.width, 0, 300) # need to figure out that width max
-        prior_whitespace = row.prior_whitespace >= WHITESPACE_MIN
+        prior_whitespace = row.prior_whitespace >= constants.WHITESPACE_MIN
         return is_upper and in_middle and first_line and prior_whitespace and not self.is_parenthetical(row)
 
     def is_action(self, row):
         is_left_align = is_in_range(row.left, 0, 130)
-        no_int_ext = row.text[:4] not in SCENE_HEADING_INDICATORS
+        no_int_ext = row.text[:4] not in constants.SCENE_HEADING_INDICATORS
         return is_left_align and no_int_ext
 
     def is_parenthetical(self, row):
         in_middle = is_in_range(row.left, 130, 300)
-        no_prior_whitespace = row.prior_whitespace < WHITESPACE_MIN
+        no_prior_whitespace = row.prior_whitespace < constants.WHITESPACE_MIN
         not_first_line = row.line_num > 0
         parentheses = row.text[0]+row.text[-1] == '()'
         return in_middle and (no_prior_whitespace or not_first_line) and parentheses 
 
     def is_dialogue(self, row):
         in_middle = is_in_range(row.left, 130, 300)
-        no_prior_whitespace = row.prior_whitespace < WHITESPACE_MIN
+        no_prior_whitespace = row.prior_whitespace < constants.WHITESPACE_MIN
         not_first_line = row.line_num > 0
         return in_middle and (no_prior_whitespace or not_first_line) and not self.is_parenthetical(row)
 
     def is_scene_heading(self, row):
         is_left_align = is_in_range(row.left, 0, 120)
-        has_int_ext = row.text[:4] in SCENE_HEADING_INDICATORS
+        has_int_ext = row.text[:4] in constants.SCENE_HEADING_INDICATORS
         return is_left_align and has_int_ext
 
     def is_page_header(self, row):
         # not guaranteed to work all the time
         not_left_align = is_in_range(row.left, 120, 800)
-        next_line_is_new_line = row.following_whitespace > WHITESPACE_MIN
+        next_line_is_new_line = row.following_whitespace > constants.WHITESPACE_MIN
         return not_left_align and next_line_is_new_line
 
     def classify_unit(self, row):
@@ -451,7 +403,7 @@ class Screenplay(object):
             return 'parenthetical'
     
     def label_lines(self):
-        self.data['unit_type'] = self.data.apply(self.classify_unit, axis=1)
+        self.raw_data['unit_type'] = self.raw_data.apply(self.classify_unit, axis=1)
         rules = {
             'is_character': self.is_character,
             'is_action': self.is_action,
@@ -459,8 +411,8 @@ class Screenplay(object):
             'is_dialogue': self.is_dialogue,
             'is_scene_heading': self.is_scene_heading
         }
-        for classifier in CLASSIFIERS:
-            self.data[classifier] = self.data.apply(rules[classifier], axis=1)
+        for classifier in constants.CLASSIFIERS:
+            self.raw_data[classifier] = self.raw_data.apply(rules[classifier], axis=1)
 
     #############
     #######
@@ -473,36 +425,40 @@ class Screenplay(object):
     def identify_characters(self):
         # remove parentheticals from character names, so that
         # JIM (VO) and JIM are identified as the same character
-        mask = self.data.unit_type=='character'
-        self.data.loc[mask, 'text'] = self.data.loc[mask, 'text'].apply(strip_parentheticals)
+        mask = self.raw_data.unit_type=='character'
+        self.raw_data.loc[mask, 'text'] = self.raw_data.loc[mask, 'text'].apply(strip_parentheticals)
 
         # forward fill characters
-        self.data = self.data.sort_values('top')
-        self.data.loc[self.data.is_character, 'character'] = self.data.loc[self.data.is_character, 'text']
-        self.data.character = self.data.character.fillna(method='ffill')
+        self.raw_data = self.raw_data.sort_values('top')
+        self.raw_data.loc[self.raw_data.is_character, 'character'] = self.raw_data.loc[self.raw_data.is_character, 'text']
+        self.raw_data.character = self.raw_data.character.fillna(method='ffill')
 
         # clear character for non-dialogue/non-parenthetical units
-        mask = self.data.unit_type.isin(['action', 'scene_heading'])
-        self.data.loc[mask, 'character'] = None
+        mask = self.raw_data.unit_type.isin(['action', 'scene_heading'])
+        self.raw_data.loc[mask, 'character'] = None
 
         # add a unique id, ordered by frequency
-        characters = self.data.pivot_table(values=['height'], index=['character'], aggfunc='sum')
+        characters = self.raw_data.pivot_table(
+            values=['height'], 
+            index=['character'], 
+            aggfunc='sum'
+        )
         characters = characters[(~characters.index.isnull()) & (characters.index!='')]
         characters = characters.sort_values('height', ascending=False).reset_index()
         characters['character_id'] = characters.index
-        self.data = pd.merge(self.data, characters[['character_id', 'character']], on='character', how='left')
+        self.raw_data = pd.merge(self.raw_data, characters[['character_id', 'character']], on='character', how='left')
 
 
     def identify_scenes(self):
-        self.data = self.data.sort_values('top')
-        self.data.loc[self.data.is_scene_heading, 'scene'] = self.data.loc[self.data.is_scene_heading, 'text']
+        self.raw_data = self.raw_data.sort_values('top')
+        self.raw_data.loc[self.raw_data.is_scene_heading, 'scene'] = self.raw_data.loc[self.raw_data.is_scene_heading, 'text']
         
         # add a unique id (different method from character
         # since two identical scene headings are still unique scenes
-        self.data.loc[self.data.is_scene_heading, 'scene_id'] = range(len(self.data.loc[self.data.is_scene_heading]))
+        self.raw_data.loc[self.raw_data.is_scene_heading, 'scene_id'] = range(len(self.raw_data.loc[self.raw_data.is_scene_heading]))
 
-        self.data['scene'] = self.data.scene.fillna(method='ffill')
-        self.data['scene_id'] = self.data.scene_id.fillna(method='ffill').fillna(9999)
+        self.raw_data['scene'] = self.raw_data.scene.fillna(method='ffill')
+        self.raw_data['scene_id'] = self.raw_data.scene_id.fillna(method='ffill').fillna(9999)
 
     #############
     #######
@@ -513,7 +469,7 @@ class Screenplay(object):
     #############
 
     def failure(self, reason, value=None):
-        self.data = pd.DataFrame()
+        self.raw_data = pd.DataFrame()
         now = str(datetime.datetime.now())
         self.failure_info = {'title': self.title, 'date': now, 'reason': reason, 'value': value}
         if self.failure_path:
@@ -521,7 +477,7 @@ class Screenplay(object):
                 f.write(json.dumps(self.failure_info) + "\n")
 
     def validate(self):
-        failure_msg = validate.validate(self.data)
+        failure_msg = validate.validate(self.raw_data)
         if failure_msg:
             self.failure(failure_msg)
 

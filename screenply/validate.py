@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from screenply import validate, constants
 
 
 def get_validation_summary(data):
@@ -69,7 +70,7 @@ def validate(data):
         return 'Text per page: {}'.format(n_chars_per_page)
 
     # has units with multiple classifications 
-    mask = data[CLASSIFIERS].sum(axis=1) > 1
+    mask = data[constants.CLASSIFIERS].sum(axis=1) > 1
     if mask.sum() > 0:
         return 'Units with more than one classification: {}'.format(mask.sum())
 
