@@ -10,7 +10,7 @@ Shout out to https://github.com/pdfminer/pdfminer.six!
 from screenply.parser import Screenplay
 
 pdf_path = 'Brooklyn_Nine-Nine_1x04_-_M.E._Time.pdf'
-screenplay = Screenplay(source=pdf_path, debug_mode=True)
+screenplay = Screenplay(source=pdf_path)
 df = screenplay.data
 
 # show top 10 characters, by dialogue length
